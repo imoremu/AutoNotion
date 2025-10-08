@@ -1,0 +1,2 @@
+2025-10-08 15:01:46,504 INFO [function_app] Custom logger configured via external file.
+2025-10-08 15:02:10,188 INFO [function_app] Python HTTP trigger function processed a request in HelloNotion.
