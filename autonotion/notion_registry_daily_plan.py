@@ -409,10 +409,77 @@ class NotionDailyPlanner:
             logger.info(f"Duplicating task from yesterday: '{task_name}'")
             self._create_page(new_page_payload)
 
+    def add_alerted_objective_tasks(self):
+        """
+        Queries the main tasks DB for objetivo/puntual tasks that have an alert date
+        less than or equal to today and are not completed, then adds them to today's registry.
+        """
+        logger.info("Starting add_alerted_objective_tasks.")
+        today = datetime.date.today()
+        today_str = today.isoformat()
+
+        # Query for objetivo or puntual tasks with alert date <= today and not completed
+        query_filter = {
+            "filter": {
+                "and": [
+                    {
+                        "or": [
+                            {"property": "Tipo", "select": {"equals": "objetivo"}},
+                            {"property": "Tipo", "select": {"equals": "puntual"}}
+                        ]
+                    },
+                    {"property": "Estado", "select": {"does_not_equal": "Completada"}},
+                    {"property": "Fecha de Alerta", "date": {"on_or_before": today_str}}
+                ]
+            }
+        }
+
+        logger.debug(f"Constructed query filter for alerted tasks: {query_filter}")
+        
+        alerted_tasks = self._query_database(self.tasks_db_id, query_filter)
+        
+        logger.info(f"Found {len(alerted_tasks)} alerted objetivo/puntual tasks.")
+
+        if not alerted_tasks:
+            logger.info("No alerted objetivo/puntual tasks found.")
+            return
+
+        # Fetch all of today's existing tasks in one go to avoid N+1 queries inside the loop.
+        existing_today_tasks_names = self._get_todays_scheduled_task_names(today_str)
+
+        for task in alerted_tasks:
+            props = task.get("properties", {})
+            task_title = props.get("Nombre", {}).get("title", [{}])
+            task_name = task_title[0].get("plain_text") if task_title else None
+            
+            if not task_name:
+                logger.warning("Skipping task due to missing task name.")
+                continue
+
+            logger.debug(f"Processing alerted task: {task_name}")
+
+            # Check against the in-memory set of today's tasks.
+            if task_name in existing_today_tasks_names:
+                logger.info(f"Task '{task_name}' for today already exists. Skipping addition.")
+                continue
+
+            # Check for an example time in the 'Hora' property.
+            new_planned_date = None
+            time_template_obj = props.get("Hora", {}).get("date")
+            if time_template_obj:
+                logger.debug(f"Found time template for '{task_name}'. Remapping to today.")
+                new_planned_date = self._remap_date_to_today(time_template_obj, today)
+            
+            new_page_payload = self._build_new_page_payload(task, task_name, new_planned_date)
+            
+            logger.info(f"Adding alerted objetivo/puntual task: '{task_name}'")
+            self._create_page(new_page_payload)
+
     def run_daily_plan(self):
         """Orchestrates the execution of the full daily plan."""
         logger.info("--- Running Notion Daily Plan ---")
         # Run unfinished task duplication first to give it priority.
         self.duplicate_unfinished_tasks_for_today()
         self.generate_periodic_tasks()
+        self.add_alerted_objective_tasks()
         logger.info("--- Notion Daily Plan Finished ---")
