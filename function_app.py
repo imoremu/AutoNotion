@@ -41,7 +41,7 @@ def HelloNotion(req: func.HttpRequest) -> func.HttpResponse:
              status_code=200
         )
 
-@app.schedule(schedule="0 5 2 * * 1-5", arg_name="myTimer", run_on_startup=False)
+@app.schedule(schedule="0 5 2 * * *", arg_name="myTimer", run_on_startup=False)
 def ScheduledNotionDailyPlan(myTimer: func.TimerRequest) -> None:
     logger.info('Timer trigger for CreateDefaultDailyNotionPlan started execution.')
 

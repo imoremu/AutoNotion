@@ -208,11 +208,12 @@ def test_sends_correct_query_for_alerted_tasks(mock_requests_post, planner):
             "and": [
                 {
                     "or": [
-                        {"property": "Tipo", "select": {"equals": "objetivo"}},
-                        {"property": "Tipo", "select": {"equals": "puntual"}}
+                        {"property": "Tipo", "select": {"equals": "Objetivo"}},
+                        {"property": "Tipo", "select": {"equals": "Hábito"}},
+                        {"property": "Tipo", "select": {"equals": "Puntual"}}
                     ]
                 },
-                {"property": "Estado", "select": {"does_not_equal": "Completada"}},
+                {"property": "Estado", "status": {"does_not_equal": "Completada"}},
                 {"property": "Fecha de Alerta", "date": {"on_or_before": today_str}}
             ]
         }

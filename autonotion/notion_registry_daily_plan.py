@@ -36,7 +36,7 @@ class NotionDailyPlanner:
             property_names = set(properties.keys())
             logger.info(f"Found properties for database {db_id}: {property_names}")
             return property_names
-        except Exception as e:
+        except Exception as e:                        
             logger.error(f"Failed to retrieve database properties for {db_id}: {e}", exc_info=True)
             # Return an empty set on failure to prevent errors, though copying will likely fail.
             return set()
@@ -57,6 +57,8 @@ class NotionDailyPlanner:
             )
             response.raise_for_status()
         except Exception as e:
+            # Log the error with traceback and error content for debugging.
+            logger.debug(f"Response content: {response.text if 'response' in locals() else 'No response received'}")
             logger.error(f"Error during database query: {e}", exc_info=True)
             raise e
 
@@ -424,11 +426,12 @@ class NotionDailyPlanner:
                 "and": [
                     {
                         "or": [
-                            {"property": "Tipo", "select": {"equals": "objetivo"}},
-                            {"property": "Tipo", "select": {"equals": "puntual"}}
+                            {"property": "Tipo", "select": {"equals": "Objetivo"}},
+                            {"property": "Tipo", "select": {"equals": "Hábito"}},
+                            {"property": "Tipo", "select": {"equals": "Puntual"}}
                         ]
                     },
-                    {"property": "Estado", "select": {"does_not_equal": "Completada"}},
+                    {"property": "Estado", "status": {"does_not_equal": "Completada"}},
                     {"property": "Fecha de Alerta", "date": {"on_or_before": today_str}}
                 ]
             }
