@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "deployments/vercel/api/hello_notion.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "deployments/vercel/api/run_daily_plan.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "deployments/vercel/api/scheduled_daily_plan.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [      
+      { "src": "/api/hello-notion", "dest": "/deployments/vercel/api/hello_notion.py" },
+      { "src": "/api/run-daily-plan", "dest": "/deployments/vercel/api/run_daily_plan.py" },
+      { "src": "/api/scheduled-daily-plan", "dest": "/deployments/vercel/api/scheduled_daily_plan.py" }
+  ],
+  "crons": [      
+      { "path": "/api/scheduled-daily-plan", "schedule": "0 4 * * *" }
+  ],  
+  "buildCommand": "pip install -r requirements.txt"
+}

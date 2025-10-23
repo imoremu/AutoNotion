@@ -10,7 +10,7 @@ TASK_OBJETIVO_ALERTED_TODAY = {  # Case 1: Objetivo task with alert date today, 
     "id": "task_objetivo_today_id",
     "properties": {
         "Nombre": {"type": "title", "title": [{"type": "text", "text": {"content": "Objetivo Task - Today"}, "plain_text": "Objetivo Task - Today"}]},
-        "Tipo": {"type": "select", "select": {"name": "objetivo"}},
+        "Tipo": {"type": "select", "select": {"name": "Objetivo"}},
         "Estado": {"type": "select", "select": {"name": "En Progreso"}},
         "Fecha de Alerta": {"type": "date", "date": {"start": "2025-10-06"}},
         "Priority": {"type": "select", "select": {"name": "High"}},
@@ -23,7 +23,7 @@ TASK_PUNTUAL_ALERTED_PAST = {  # Case 2: Puntual task with alert date in the pas
     "id": "task_puntual_past_id",
     "properties": {
         "Nombre": {"type": "title", "title": [{"type": "text", "text": {"content": "Puntual Task - Past Alert"}, "plain_text": "Puntual Task - Past Alert"}]},
-        "Tipo": {"type": "select", "select": {"name": "puntual"}},
+        "Tipo": {"type": "select", "select": {"name": "Puntual"}},
         "Estado": {"type": "select", "select": {"name": "No Iniciada"}},
         "Fecha de Alerta": {"type": "date", "date": {"start": "2025-10-05"}},
         "Effort": {"type": "number", "number": 3}
@@ -34,7 +34,7 @@ TASK_OBJETIVO_COMPLETED = {  # Case 3: Objetivo task with alert today, but compl
     "id": "task_objetivo_completed_id",
     "properties": {
         "Nombre": {"type": "title", "title": [{"type": "text", "text": {"content": "Objetivo Task - Completed"}, "plain_text": "Objetivo Task - Completed"}]},
-        "Tipo": {"type": "select", "select": {"name": "objetivo"}},
+        "Tipo": {"type": "select", "select": {"name": "Objetivo"}},
         "Estado": {"type": "select", "select": {"name": "Completada"}},
         "Fecha de Alerta": {"type": "date", "date": {"start": "2025-10-06"}}
     }
@@ -44,7 +44,7 @@ TASK_OBJETIVO_FUTURE_ALERT = {  # Case 4: Objetivo task with future alert date. 
     "id": "task_objetivo_future_id",
     "properties": {
         "Nombre": {"type": "title", "title": [{"type": "text", "text": {"content": "Objetivo Task - Future Alert"}, "plain_text": "Objetivo Task - Future Alert"}]},
-        "Tipo": {"type": "select", "select": {"name": "objetivo"}},
+        "Tipo": {"type": "select", "select": {"name": "Objetivo"}},
         "Estado": {"type": "select", "select": {"name": "En Progreso"}},
         "Fecha de Alerta": {"type": "date", "date": {"start": "2025-10-07"}}
     }
@@ -64,7 +64,7 @@ TASK_OBJETIVO_NO_ALERT_DATE = {  # Case 6: Objetivo task with no alert date. SHO
     "id": "task_objetivo_no_alert_id",
     "properties": {
         "Nombre": {"type": "title", "title": [{"type": "text", "text": {"content": "Objetivo Task - No Alert"}, "plain_text": "Objetivo Task - No Alert"}]},
-        "Tipo": {"type": "select", "select": {"name": "objetivo"}},
+        "Tipo": {"type": "select", "select": {"name": "Objetivo"}},
         "Estado": {"type": "select", "select": {"name": "En Progreso"}},
         "Fecha de Alerta": {"type": "date", "date": None}
     }
@@ -206,13 +206,7 @@ def test_sends_correct_query_for_alerted_tasks(mock_requests_post, planner):
     expected_filter = {
         "filter": {
             "and": [
-                {
-                    "or": [
-                        {"property": "Tipo", "select": {"equals": "Objetivo"}},
-                        {"property": "Tipo", "select": {"equals": "Hábito"}},
-                        {"property": "Tipo", "select": {"equals": "Puntual"}}
-                    ]
-                },
+                {"property": "Tipo", "select": {"does_not_equal": "Periódica"}},
                 {"property": "Estado", "status": {"does_not_equal": "Completada"}},
                 {"property": "Fecha de Alerta", "date": {"on_or_before": today_str}}
             ]
@@ -289,7 +283,7 @@ def test_task_with_no_hora_property(mock_requests_post, planner):
         "id": "task_no_hora_id",
         "properties": {
             "Nombre": {"type": "title", "title": [{"type": "text", "text": {"content": "Task Without Hora"}, "plain_text": "Task Without Hora"}]},
-            "Tipo": {"type": "select", "select": {"name": "objetivo"}},
+            "Tipo": {"type": "select", "select": {"name": "Objetivo"}},
             "Estado": {"type": "select", "select": {"name": "En Progreso"}},
             "Fecha de Alerta": {"type": "date", "date": {"start": "2025-10-06"}}
         }
@@ -312,5 +306,7 @@ def test_task_with_no_hora_property(mock_requests_post, planner):
     assert created_props["Nombre"]["title"][0]["text"]["content"] == "Task Without Hora"
     # Verify "Horario Planificado" is not set since there's no "Hora"
     assert "Horario Planificado" not in created_props
+
+
 
 

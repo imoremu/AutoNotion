@@ -7,7 +7,7 @@ import os
 from autonotion.notion_registry_daily_plan import NotionDailyPlanner
 
 # Load logging configuration from external file.
-config_file = os.path.join(os.path.dirname(__file__), "logging_config.json")
+config_file = os.path.join(os.path.dirname(__file__), "..", "..", "config", "logging.json")
 if os.path.exists(config_file):
     with open(config_file, "rt") as f:
         config = json.load(f)
