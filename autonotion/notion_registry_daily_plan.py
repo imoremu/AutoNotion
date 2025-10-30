@@ -306,9 +306,8 @@ class NotionDailyPlanner:
         """
         logger.info("Starting periodic task generation.")
         today = datetime.date.today()
+        today_str = today.isoformat()
 
-        # Fetch all tasks already scheduled for today to prevent duplicates.
-        existing_today_tasks_names = self._get_todays_scheduled_task_names(today.isoformat())
         query_filter = {"filter": {"property": "Tipo", "select": {"equals": "Periódica"}}}
         
         periodic_tasks = self._query_database(self.tasks_db_id, query_filter)
@@ -323,7 +322,7 @@ class NotionDailyPlanner:
 
             logger.debug(f"Processing periodic task with title property: {task_name}")
 
-            if not task_name or task_name in existing_today_tasks_names:
+            if not task_name or task_name in self.existing_tasks_names[today_str]:
                 if task_name: logger.info(f"Skipping periodic task '{task_name}' as it already exists for today.")
                 continue
 
@@ -347,6 +346,7 @@ class NotionDailyPlanner:
         """        
         logger.info("Starting duplicate_unfinished_tasks_for_today.")
         today = datetime.date.today()
+        today_str = today.isoformat()
 
         yesterday_str = (today - datetime.timedelta(days=1)).isoformat()
         logger.debug(f"Today's date: {today.isoformat()}, Yesterday's date: {yesterday_str}")
@@ -374,10 +374,7 @@ class NotionDailyPlanner:
         if not tasks_to_duplicate:
             logger.info("No unfinished tasks from yesterday found to duplicate.")
             return
-
-        # Fetch all of today's existing tasks in one go to avoid N+1 queries inside the loop.
-        existing_today_tasks_names = self._get_todays_scheduled_task_names(today.isoformat())
-
+    
         for task in tasks_to_duplicate:
             props = task.get("properties", {})
             task_title = props.get("Nombre", {}).get("title", [{}])
@@ -397,7 +394,7 @@ class NotionDailyPlanner:
                 continue            
 
             # Check against the in-memory set of today's tasks.
-            if task_name in existing_today_tasks_names:
+            if task_name in self.existing_tasks_names[today.isoformat()]:
                 logger.info(f"Task '{task_name}' for today already exists. Skipping duplication.")
                 continue
 
@@ -406,6 +403,8 @@ class NotionDailyPlanner:
 
             new_page_payload = self._build_new_page_payload(task, task_name, new_planned_date)
             
+            self.existing_tasks_names[today.isoformat()].add(task_name)
+
             logger.info(f"Duplicating task from yesterday: '{task_name}'")
             self._create_page(new_page_payload)
 
@@ -439,9 +438,6 @@ class NotionDailyPlanner:
             logger.info("No alerted objetivo/puntual tasks found.")
             return
 
-        # Fetch all of today's existing tasks in one go to avoid N+1 queries inside the loop.
-        existing_today_tasks_names = self._get_todays_scheduled_task_names(today_str)
-
         for task in alerted_tasks:
             props = task.get("properties", {})
             task_title = props.get("Nombre", {}).get("title", [{}])
@@ -454,7 +450,7 @@ class NotionDailyPlanner:
             logger.debug(f"Processing alerted task: {task_name}")
 
             # Check against the in-memory set of today's tasks.
-            if task_name in existing_today_tasks_names:
+            if task_name in self.existing_tasks_names[today_str]:
                 logger.info(f"Task '{task_name}' for today already exists. Skipping addition.")
                 continue
 
@@ -464,8 +460,13 @@ class NotionDailyPlanner:
             if time_template_obj:
                 logger.debug(f"Found time template for '{task_name}'. Remapping to today.")
                 new_planned_date = self._remap_date_to_today(time_template_obj, today)
-            
+            else:
+                logger.debug(f"No time template found for '{task_name}'. Setting to all-day.")
+                new_planned_date = {"start": today_str}
+
             new_page_payload = self._build_new_page_payload(task, task_name, new_planned_date)
+
+            self.existing_tasks_names[today_str].add(task_name)
             
             logger.info(f"Adding alerted objetivo/puntual task: '{task_name}'")
             self._create_page(new_page_payload)
@@ -474,6 +475,13 @@ class NotionDailyPlanner:
         """Orchestrates the execution of the full daily plan."""
         logger.info("--- Running Notion Daily Plan ---")
         # Run unfinished task duplication first to give it priority.
+        
+        today = datetime.date.today()
+        today_str = today.isoformat()
+        self.existing_tasks_names = {}
+
+        self.existing_tasks_names[today_str] = self._get_todays_scheduled_task_names(today_str)
+
         self.duplicate_unfinished_tasks_for_today()
         self.generate_periodic_tasks()
         self.add_alerted_objective_tasks()
