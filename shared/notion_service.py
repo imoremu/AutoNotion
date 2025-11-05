@@ -4,51 +4,16 @@ This module contains the core Notion service logic that can be used by both plat
 """
 import datetime
 import logging
-import logging.config
 import os
-import json
+# When this module is imported, Python automatically executes shared/__init__.py first,
+# which sets up the universal logging configuration
 from autonotion.notion_registry_daily_plan import NotionDailyPlanner
-
-# Configure logging
-def setup_logging():
-    """Setup logging configuration for the shared service."""
-    # Try different possible locations for logging config
-    possible_configs = [
-        os.path.join(os.path.dirname(__file__), "..", "logging_config.json"),
-        os.path.join(os.path.dirname(__file__), "..", "config", "logging.json"),
-        os.path.join(os.path.dirname(__file__), "..", "config", "logging_config.json")
-    ]
-    
-    config_loaded = False
-    for config_file in possible_configs:
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, "rt") as f:
-                    config = json.load(f)
-                logging.config.dictConfig(config)
-                config_loaded = True
-                break
-            except Exception as e:
-                print(f"Error loading logging config from {config_file}: {e}")
-    
-    if not config_loaded:
-        # Fallback to basic logging with environment variable level (business-specific logging)
-        log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO').upper()
-        log_level_value = getattr(logging, log_level, logging.INFO)
-        
-        logging.basicConfig(
-            level=log_level_value,
-            format='%(asctime)s %(levelname)s [%(name)s] %(message)s',
-            handlers=[logging.StreamHandler()]
-        )
-        print(f"Shared service logging fallback configured with level: {log_level}")
 
 class NotionService:
     """Shared service class that can be used by both Azure Functions and Vercel."""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        setup_logging()
     
     def get_environment_variables(self):
         """Get required environment variables for Notion API."""

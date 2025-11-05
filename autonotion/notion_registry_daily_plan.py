@@ -4,7 +4,6 @@ import requests
 import os
 from tenacity import retry, wait_fixed, stop_after_attempt
 
-# Use hierarchical naming for the logger.
 logger = logging.getLogger(__name__)
 
 RETRY_WAIT_SECONDS = int(os.environ.get("RETRY_WAIT_SECONDS", 5))
@@ -15,6 +14,8 @@ class NotionDailyPlanner:
         logger.debug("Initializing NotionDailyPlanner.")
         self.registry_db_id = registry_db_id
         self.tasks_db_id = tasks_db_id
+                    
+        self.existing_tasks_names = {}
 
         self.headers = {
             "Authorization": f"Bearer {api_key}",
@@ -485,7 +486,6 @@ class NotionDailyPlanner:
         
         today = datetime.date.today()
         today_str = today.isoformat()
-        self.existing_tasks_names = {}
 
         self.existing_tasks_names[today_str] = self._get_todays_scheduled_task_names(today_str)
 
