@@ -355,14 +355,8 @@ class NotionDailyPlanner:
         query_filter = {
             "filter": {
                 "and": [
-                    {
-                        "not": {
-                            "or": [
-                                {"property": "Estado", "status": {"equals": "Finalizada"}},
-                                {"property": "Estado", "status": {"equals": "Cancelada"}}
-                            ]
-                        }
-                    },
+                    {"property": "Estado", "status": {"does_not_equal": "Finalizada"}},
+                    {"property": "Estado", "status": {"does_not_equal": "Cancelada"}},         
                     {
                         "or": [
                             {"property": "Horario", "date": {"equals": yesterday_str}},                            

@@ -213,7 +213,8 @@ def test_sends_correct_query_to_notion(mock_requests_post, planner):
     expected_filter = {
             "filter": {
                 "and": [
-                    {"property": "Finalizada", "checkbox": {"equals": False}},
+                    {"property": "Estado", "status": {"does_not_equal": "Finalizada"}},
+                    {"property": "Estado", "status": {"does_not_equal": "Cancelada"}},
                     {
                         "or": [
                             {"property": "Horario", "date": {"equals": yesterday_str}},                            
