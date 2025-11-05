@@ -323,7 +323,7 @@ class NotionDailyPlanner:
 
             logger.debug(f"Processing periodic task with title property: {task_name}")
 
-            if not task_name or task_name in self.existing_tasks_names[today_str]:
+            if not task_name or (today_str in self.existing_tasks_names and task_name in self.existing_tasks_names[today_str]):
                 if task_name: logger.info(f"Skipping periodic task '{task_name}' as it already exists for today.")
                 continue
 
@@ -396,7 +396,7 @@ class NotionDailyPlanner:
                 continue            
 
             # Check against the in-memory set of today's tasks.
-            if task_name in self.existing_tasks_names[today.isoformat()]:
+            if today.isoformat() in self.existing_tasks_names and task_name in self.existing_tasks_names[today.isoformat()]:
                 logger.info(f"Task '{task_name}' for today already exists. Skipping duplication.")
                 continue
 
@@ -405,7 +405,9 @@ class NotionDailyPlanner:
 
             new_page_payload = self._build_new_page_payload(task, task_name, new_planned_date)
             
-            self.existing_tasks_names[today.isoformat()].add(task_name)
+            # Update existing_tasks_names if it exists (e.g., when called from run_daily_plan)
+            if today.isoformat() in self.existing_tasks_names:
+                self.existing_tasks_names[today.isoformat()].add(task_name)
 
             logger.info(f"Duplicating task from yesterday: '{task_name}'")
             self._create_page(new_page_payload)
@@ -452,7 +454,7 @@ class NotionDailyPlanner:
             logger.debug(f"Processing alerted task: {task_name}")
 
             # Check against the in-memory set of today's tasks.
-            if task_name in self.existing_tasks_names[today_str]:
+            if today_str in self.existing_tasks_names and task_name in self.existing_tasks_names[today_str]:
                 logger.info(f"Task '{task_name}' for today already exists. Skipping addition.")
                 continue
 
@@ -468,7 +470,9 @@ class NotionDailyPlanner:
 
             new_page_payload = self._build_new_page_payload(task, task_name, new_planned_date)
 
-            self.existing_tasks_names[today_str].add(task_name)
+            # Update existing_tasks_names if it exists (e.g., when called from run_daily_plan)
+            if today_str in self.existing_tasks_names:
+                self.existing_tasks_names[today_str].add(task_name)
             
             logger.info(f"Adding alerted objetivo/puntual task: '{task_name}'")
             self._create_page(new_page_payload)

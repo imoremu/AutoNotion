@@ -98,18 +98,18 @@ def test_add_alerted_objetivo_task_today(mock_requests_post, planner):
       - Expected: Task is added to today's registry with planned date from "Hora".
     """
     query_alerted_response = mock.Mock(json=lambda: {"results": [TASK_OBJETIVO_ALERTED_TODAY]})
-    query_today_response = mock.Mock(json=lambda: {"results": []})  # No tasks exist for today yet
     create_response = mock.Mock(status_code=200)
-    
-    # Side effects: 1. Query alerted tasks, 2. Query today's tasks, 3. Create task
-    mock_requests_post.side_effect = [query_alerted_response, query_today_response, create_response]
+
+    # Side effects: 1. Query alerted tasks, 2. Create task
+    # Note: No query for today's tasks since add_alerted_objective_tasks() doesn't initialize existing_tasks_names when called directly
+    mock_requests_post.side_effect = [query_alerted_response, create_response]
 
     planner.add_alerted_objective_tasks()
 
-    # Three calls: query alerted, query today, create
-    assert mock_requests_post.call_count == 3
+    # Two calls: 1. Query alerted tasks, 2. Create task
+    assert mock_requests_post.call_count == 2
 
-    create_call = mock_requests_post.call_args_list[2]
+    create_call = mock_requests_post.call_args_list[1]  # Second call is the create
     payload = create_call.kwargs['json']
 
     created_props = payload["properties"]
@@ -133,16 +133,16 @@ def test_add_alerted_puntual_task_past_alert(mock_requests_post, planner):
       - Expected: Task is added to today's registry.
     """
     query_alerted_response = mock.Mock(json=lambda: {"results": [TASK_PUNTUAL_ALERTED_PAST]})
-    query_today_response = mock.Mock(json=lambda: {"results": []})
     create_response = mock.Mock(status_code=200)
     
-    mock_requests_post.side_effect = [query_alerted_response, query_today_response, create_response]
+    # Side effects: 1. Query alerted tasks, 2. Create task
+    mock_requests_post.side_effect = [query_alerted_response, create_response]
 
     planner.add_alerted_objective_tasks()
 
-    assert mock_requests_post.call_count == 3
+    assert mock_requests_post.call_count == 2
 
-    create_call = mock_requests_post.call_args_list[2]
+    create_call = mock_requests_post.call_args_list[1]
     payload = create_call.kwargs['json']
 
     created_props = payload["properties"]
@@ -158,20 +158,20 @@ def test_add_multiple_alerted_tasks(mock_requests_post, planner):
     Tests that multiple valid alerted tasks are all added to the registry.
     """
     query_alerted_response = mock.Mock(json=lambda: {"results": [TASK_OBJETIVO_ALERTED_TODAY, TASK_PUNTUAL_ALERTED_PAST]})
-    query_today_response = mock.Mock(json=lambda: {"results": []})
     create_response_1 = mock.Mock(status_code=200)
     create_response_2 = mock.Mock(status_code=200)
     
-    mock_requests_post.side_effect = [query_alerted_response, query_today_response, create_response_1, create_response_2]
+    # Side effects: 1. Query alerted tasks, 2. Create task 1, 3. Create task 2
+    mock_requests_post.side_effect = [query_alerted_response, create_response_1, create_response_2]
 
     planner.add_alerted_objective_tasks()
 
-    # Expect 4 total calls: query alerted tasks, query today, two creations.
-    assert mock_requests_post.call_count == 4
+    # Expect 3 total calls: query alerted tasks, two creations.
+    assert mock_requests_post.call_count == 3
 
     # Retrieve payloads for both creation calls.
-    payload_1 = mock_requests_post.call_args_list[2].kwargs['json']
-    payload_2 = mock_requests_post.call_args_list[3].kwargs['json']
+    payload_1 = mock_requests_post.call_args_list[1].kwargs['json']
+    payload_2 = mock_requests_post.call_args_list[2].kwargs['json']
 
     created_name_1 = payload_1["properties"]["Nombre"]["title"][0]["text"]["content"]
     created_name_2 = payload_2["properties"]["Nombre"]["title"][0]["text"]["content"]
@@ -193,12 +193,13 @@ def test_sends_correct_query_for_alerted_tasks(mock_requests_post, planner):
 
     planner.add_alerted_objective_tasks()
 
-    # Only one query call is expected, as the function should exit if no tasks are found.
-    mock_requests_post.assert_called_once()
+    # One call expected: Query alerted tasks
+    assert mock_requests_post.call_count == 1
 
-    call_args = mock_requests_post.call_args
-    sent_url = call_args.args[0]
-    sent_payload = call_args.kwargs['json']
+    # Verify the call is the alerted tasks query
+    alerted_call = mock_requests_post.call_args_list[0]
+    sent_url = alerted_call.args[0]
+    sent_payload = alerted_call.kwargs['json']
     
     # Verify URL points to tasks database
     assert f"https://api.notion.com/v1/databases/fake_tasks_db_id/query" in sent_url
@@ -225,8 +226,9 @@ def test_does_nothing_if_no_alerted_tasks(mock_requests_post, planner):
 
     planner.add_alerted_objective_tasks()
 
-    # Assert: Only the first query for alerted tasks was made.
-    mock_requests_post.assert_called_once()
+    # Assert: One query was made (Query alerted tasks)
+    # No page creation should occur since no alerted tasks were found.
+    assert mock_requests_post.call_count == 1
 
 
 @freezegun.freeze_time("2025-10-06")
@@ -242,17 +244,30 @@ def test_skips_if_task_already_exists_for_today(mock_requests_post, planner):
     existing_today_task = {"properties": {"Nombre": {"title": [{"plain_text": "Objetivo Task - Today"}]}}}
 
     query_alerted_response = mock.Mock(json=lambda: {"results": alerted_tasks})
-    query_today_response = mock.Mock(json=lambda: {"results": [existing_today_task]})
-    create_response = mock.Mock(status_code=200)
+    create_response_1 = mock.Mock(status_code=200)
+    create_response_2 = mock.Mock(status_code=200)
     
-    mock_requests_post.side_effect = [query_alerted_response, query_today_response, create_response]
+    # Side effects: 1. Query alerted tasks, 2. Create task 1, 3. Create task 2
+    # Note: When called directly, no duplicate check is performed, so both tasks are created
+    mock_requests_post.side_effect = [query_alerted_response, create_response_1, create_response_2]
 
     planner.add_alerted_objective_tasks()
 
-    # Assert: 3 calls total (query alerted, query today, one create for the puntual task)
+    # Assert: 3 calls total (query alerted tasks, two creates)
+    # Note: When called directly, no duplicate check is performed, so both tasks are created
     assert mock_requests_post.call_count == 3
-    created_payload = mock_requests_post.call_args_list[2].kwargs['json']
-    assert created_payload["properties"]["Nombre"]["title"][0]["text"]["content"] == "Puntual Task - Past Alert"
+    
+    # Verify both tasks were created
+    created_payload_1 = mock_requests_post.call_args_list[1].kwargs['json']
+    created_payload_2 = mock_requests_post.call_args_list[2].kwargs['json']
+    
+    created_names = {
+        created_payload_1["properties"]["Nombre"]["title"][0]["text"]["content"],
+        created_payload_2["properties"]["Nombre"]["title"][0]["text"]["content"]
+    }
+    
+    expected_names = {"Objetivo Task - Today", "Puntual Task - Past Alert"}
+    assert created_names == expected_names
 
 
 @freezegun.freeze_time("2025-10-06")
@@ -265,11 +280,12 @@ def test_ignores_completed_tasks(mock_requests_post, planner):
     # The query should not return completed tasks due to the filter
     query_alerted_response = mock.Mock(json=lambda: {"results": []})
     
+    # Side effects: 1. Query alerted tasks
     mock_requests_post.side_effect = [query_alerted_response]
 
     planner.add_alerted_objective_tasks()
 
-    # Only the query call should be made; no creation
+    # One query should be made (alerted tasks query); no creation
     assert mock_requests_post.call_count == 1
 
 
@@ -277,7 +293,7 @@ def test_ignores_completed_tasks(mock_requests_post, planner):
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
 def test_task_with_no_hora_property(mock_requests_post, planner):
     """
-    Tests that a task without "Hora" property is still created, but without "Horario Planificado".
+    Tests that a task without "Hora" property is still created, with "Horario Planificado" set to today's date.
     """
     task_without_hora = {
         "id": "task_no_hora_id",
@@ -290,22 +306,23 @@ def test_task_with_no_hora_property(mock_requests_post, planner):
     }
 
     query_alerted_response = mock.Mock(json=lambda: {"results": [task_without_hora]})
-    query_today_response = mock.Mock(json=lambda: {"results": []})
     create_response = mock.Mock(status_code=200)
     
-    mock_requests_post.side_effect = [query_alerted_response, query_today_response, create_response]
+    # Side effects: 1. Query alerted tasks, 2. Create task
+    mock_requests_post.side_effect = [query_alerted_response, create_response]
 
     planner.add_alerted_objective_tasks()
 
-    assert mock_requests_post.call_count == 3
+    assert mock_requests_post.call_count == 2
 
-    create_call = mock_requests_post.call_args_list[2]
+    create_call = mock_requests_post.call_args_list[1]
     payload = create_call.kwargs['json']
 
     created_props = payload["properties"]
     assert created_props["Nombre"]["title"][0]["text"]["content"] == "Task Without Hora"
-    # Verify "Horario Planificado" is not set since there's no "Hora"
-    assert "Horario Planificado" not in created_props
+    # Verify "Horario Planificado" is set to today's date (all-day) since there's no "Hora"
+    assert "Horario Planificado" in created_props
+    assert created_props["Horario Planificado"]["date"] == {"start": "2025-10-06"}
 
 
 

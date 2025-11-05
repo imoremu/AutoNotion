@@ -107,25 +107,27 @@ class TestSharedServiceIntegration:
     
     def test_flask_apps_use_shared_service(self):
         """Test that Flask apps can use the shared service."""
-        # Test hello_notion app
+        # Test hello_notion app - always returns 200 (no env vars needed)
         with hello_app.test_client() as client:
             response = client.get('/?name=TestUser')
             assert response.status_code == 200
             assert "Hello, TestUser" in response.get_json()['body']
         
-        # Test run_daily_plan app (will fail due to missing env vars, but should not crash)
+        # Test run_daily_plan app - returns 400 when env vars are missing (expected behavior)
         with daily_plan_app.test_client() as client:
             response = client.post('/')
-            assert response.status_code == 200
+            assert response.status_code == 400
             result = response.get_json()
             assert 'body' in result
+            assert 'Missing Notion environment variables' in result['body']
         
-        # Test scheduled_daily_plan app (will fail due to missing env vars, but should not crash)
+        # Test scheduled_daily_plan app - returns 400 when env vars are missing (expected behavior)
         with scheduled_app.test_client() as client:
             response = client.post('/')
-            assert response.status_code == 200
+            assert response.status_code == 400
             result = response.get_json()
             assert 'body' in result
+            assert 'Missing Notion environment variables' in result['body']
     
     def test_flask_apps_error_handling(self):
         """Test that Flask apps handle errors gracefully."""
@@ -149,14 +151,17 @@ class TestSharedServiceIntegration:
         assert scheduled_app is not None
         
         # Test that apps can handle requests without logging errors
+        # hello_notion works without env vars
         with hello_app.test_client() as client:
             response = client.get('/')
             assert response.status_code == 200
         
+        # run_daily_plan and scheduled_daily_plan return 400 when env vars are missing
+        # This is expected behavior, not an error - the apps handle it gracefully
         with daily_plan_app.test_client() as client:
             response = client.post('/')
-            assert response.status_code == 200
+            assert response.status_code == 400  # Expected when env vars are missing
         
         with scheduled_app.test_client() as client:
             response = client.post('/')
-            assert response.status_code == 200
+            assert response.status_code == 400  # Expected when env vars are missing

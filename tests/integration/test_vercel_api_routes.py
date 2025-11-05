@@ -76,7 +76,7 @@ class TestVercelAPIRoutes:
         with daily_plan_app.test_client() as client:
             response = client.post('/')
             
-            assert response.status_code == 200
+            assert response.status_code == 500
             result = response.get_json()
             assert 'Test error occurred' in result['body']
     
@@ -95,7 +95,7 @@ class TestVercelAPIRoutes:
             
             assert response.status_code == 200
             result = response.get_json()
-            assert 'Scheduled execution completed' in result['body']
+            assert 'Daily plan executed successfully' in result['body']
             mock_service.run_daily_plan.assert_called_once()
     
     @mock.patch('deployments.vercel.api.scheduled_daily_plan.NotionService')
@@ -111,9 +111,9 @@ class TestVercelAPIRoutes:
         with scheduled_app.test_client() as client:
             response = client.post('/')
             
-            assert response.status_code == 200
+            assert response.status_code == 500
             result = response.get_json()
-            assert 'Scheduled execution completed' in result['body']
+            assert 'Test error occurred' in result['body']
             mock_service.run_daily_plan.assert_called_once()
     
     def test_hello_notion_api_route(self):
@@ -129,7 +129,8 @@ class TestVercelAPIRoutes:
         with daily_plan_app.test_client() as client:
             response = client.post('/api/run-daily-plan')
             
-            assert response.status_code == 200
+            # Should return 400 when env vars are missing (expected behavior)
+            assert response.status_code == 400
             # Should return some response (success or error)
             assert 'body' in response.get_json()
     
@@ -138,6 +139,7 @@ class TestVercelAPIRoutes:
         with scheduled_app.test_client() as client:
             response = client.post('/api/scheduled-daily-plan')
             
-            assert response.status_code == 200
+            # Should return 400 when env vars are missing (expected behavior)
+            assert response.status_code == 400
             # Should return some response (success or error)
             assert 'body' in response.get_json()
