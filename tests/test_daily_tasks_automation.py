@@ -1,9 +1,12 @@
-import unittest.mock as mock
-import requests
-import pytest
-from autonotion.notion_registry_daily_plan import NotionDailyPlanner
 import datetime
+import os
+import unittest.mock as mock
+
+import pytest
+import requests
 from tenacity import RetryError
+
+from autonotion.notion_registry_daily_plan import NotionDailyPlanner
 
 def test_query_database_retries():
     """
@@ -11,11 +14,12 @@ def test_query_database_retries():
     if all retry attempts are exhausted. Relies on `pytest.ini` to set
     RETRY_ATTEMPTS=2 for the test environment.
     """
-    with mock.patch('autonotion.notion_registry_daily_plan.requests.get') as mock_get:
-        # Mock the schema fetch during initialization
-        mock_get.return_value = mock.Mock(json=lambda: {"properties": {}})
-        
-        planner = NotionDailyPlanner("fake_key", "fake_registry_db_id", "fake_tasks_db_id")
+    with mock.patch.dict(os.environ, {"NOTION_TIMEZONE": "Europe/Madrid"}):
+        with mock.patch('autonotion.notion_registry_daily_plan.requests.get') as mock_get:
+            # Mock the schema fetch during initialization
+            mock_get.return_value = mock.Mock(json=lambda: {"properties": {}})
+            
+            planner = NotionDailyPlanner("fake_key", "fake_registry_db_id", "fake_tasks_db_id")
         query_filter = {"dummy": "filter"}
 
         # Side effect: both the initial call and the retry will fail.
@@ -32,19 +36,20 @@ def test_query_database_retries():
             # Assert that requests.post was called exactly 2 times.
             assert mock_post.call_count == 2
 
-def test_remap_date_to_today():
-    # Given a Notion date object with timezone offset
-    date_obj = {
-        "start": "2025-10-06T15:00:00+02:00",
-        "end": "2025-10-06T17:00:00+02:00"
-    }
+def test_build_planned_datetime():
+    today = datetime.date(2025, 10, 6)
 
-    # And a specific "today" date
-    today = datetime.date(2025, 10, 7)
+    with mock.patch.dict(os.environ, {"NOTION_TIMEZONE": "Europe/Madrid"}):
+        with mock.patch('autonotion.notion_registry_daily_plan.requests.get') as mock_get:
+            mock_get.return_value = mock.Mock(json=lambda: {"properties": {}})
+            planner = NotionDailyPlanner("fake_key", "fake_registry_db_id", "fake_tasks_db_id")
 
-    # When we remap the date to today
-    new_date = NotionDailyPlanner._remap_date_to_today(date_obj, today)
-    
-    # Then the date part should be updated, but the time and timezone should be preserved.
-    assert new_date["start"] == "2025-10-07T15:00:00+02:00"
-    assert new_date["end"] == "2025-10-07T17:00:00+02:00"
+    planned = planner._build_planned_datetime(today, "09:00", "10:00", "Test Task")
+    expected_start = datetime.datetime.combine(today, datetime.time(9, 0), tzinfo=planner.timezone).isoformat()
+    expected_end = datetime.datetime.combine(today, datetime.time(10, 0), tzinfo=planner.timezone).isoformat()
+    assert planned["start"] == expected_start
+    assert planned["end"] == expected_end
+
+    fallback = planner._build_planned_datetime(today, None, None, "Fallback Task")
+    expected_fallback = datetime.datetime.combine(today, datetime.time(0, 0), tzinfo=planner.timezone).isoformat()
+    assert fallback == {"start": expected_fallback}

@@ -1,8 +1,10 @@
 import datetime
 import logging
-import requests
 import os
+
+import requests
 from tenacity import retry, wait_fixed, stop_after_attempt
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -17,15 +19,65 @@ class NotionDailyPlanner:
                     
         self.existing_tasks_names = {}
 
+        tz_str = os.environ.get("NOTION_TIMEZONE")
+        if tz_str:
+            try:
+                self.timezone = ZoneInfo(tz_str)
+                logger.info(f"Using timezone from NOTION_TIMEZONE environment variable: {tz_str}")
+            except Exception:
+                logger.warning(f"NOTION_TIMEZONE variable '{tz_str}' is invalid. Falling back to server timezone.")
+                self.timezone = datetime.datetime.now().astimezone().tzinfo
+        else:
+            logger.info("NOTION_TIMEZONE variable not set. Using server timezone.")
+            self.timezone = datetime.datetime.now().astimezone().tzinfo
+
+        logger.debug(f"Selected timezone: {self.timezone}")
+
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Notion-Version": "2022-06-28"
         }
+
         logger.debug(f"Headers set to: {self.headers}")
-        
+
         # Fetch the properties of the target registry database to ensure we only copy valid properties.
         self.registry_db_properties = self._get_db_properties(self.registry_db_id)
+
+    def _build_planned_datetime(
+        self,
+        today: datetime.date,
+        start_time_str: str | None,
+        end_time_str: str | None,
+        task_name: str,
+    ) -> dict:
+        planned = {}
+
+        try:
+            if start_time_str:
+                start_time = datetime.time.fromisoformat(start_time_str)
+                new_start_dt = datetime.datetime.combine(today, start_time, tzinfo=self.timezone)
+                planned["start"] = new_start_dt.isoformat()
+                logger.debug(f"Using start time '{start_time_str}' for '{task_name}'")
+
+                if end_time_str:
+                    end_time = datetime.time.fromisoformat(end_time_str)
+                    new_end_dt = datetime.datetime.combine(today, end_time, tzinfo=self.timezone)
+                    planned["end"] = new_end_dt.isoformat()
+                    logger.debug(f"Using end time '{end_time_str}' for '{task_name}'")
+            else:
+                logger.debug(f"No start time found for '{task_name}'. Setting to 12:00.")
+                start_of_day = datetime.datetime(today.year, today.month, today.day, 12, 0, 0, tzinfo=self.timezone)
+                planned = {"start": start_of_day.isoformat()}
+        except ValueError as e:
+            logger.warning(
+                f"Invalid time format in '{task_name}' (Start: '{start_time_str}', End: '{end_time_str}'). "
+                f"Using 00:00. Error: {e}"
+            )
+            start_of_day = datetime.datetime(today.year, today.month, today.day, 12, 0, 0, tzinfo=self.timezone)
+            planned = {"start": start_of_day.isoformat()}
+
+        return planned
 
     def _get_db_properties(self, db_id: str) -> set:
         """Retrieves the set of property names for a given database."""
@@ -57,6 +109,19 @@ class NotionDailyPlanner:
                 timeout=15
             )
             response.raise_for_status()
+        except requests.HTTPError as e:
+            try:
+                error_body = e.response.json()
+            except Exception:
+                error_body = e.response.text if e.response is not None else "No response body"
+            logger.error(
+                "Error during database query: %s | status=%s | body=%s",
+                e,
+                e.response.status_code if e.response is not None else "unknown",
+                error_body,
+                exc_info=True,
+            )
+            raise e
         except Exception as e:
             logger.error(f"Error during database query: {e}", exc_info=True)
             raise e
@@ -86,51 +151,31 @@ class NotionDailyPlanner:
         logger.debug("Page creation successful.")
         return create_response
     
-    @staticmethod    
-    def _remap_date_to_today(date_obj: dict, today_date: datetime.date) -> dict:
-        """
-        Takes a Notion date object and remaps its date part to today,
-        keeping the original time of day and timezone.
-        """
-        logger.debug(f"Remapping date object {date_obj} to today's date {today_date.isoformat()}")
-        if not date_obj:
-            logger.warning("No date object provided for remapping.")
-            return None
-    
-        new_date = {}
-    
-        start_str = date_obj.get("start")
-        if start_str:
-            # Parse the full ISO string to get a timezone-aware datetime object.
-            start_dt = datetime.datetime.fromisoformat(start_str)
-            # Create a new datetime object by replacing the date parts but keeping time and timezone.
-            new_start_dt = start_dt.replace(year=today_date.year, month=today_date.month, day=today_date.day)
-            new_date["start"] = new_start_dt.isoformat()
-            logger.debug(f"Remapped start date: {new_date['start']}")
-        else:
-            new_date["start"] = today_date.isoformat()
-            logger.debug("Start date was missing; using today's date.")
-    
-        end_str = date_obj.get("end")
-        if end_str:
-            end_dt = datetime.datetime.fromisoformat(end_str)
-            new_end_dt = end_dt.replace(year=today_date.year, month=today_date.month, day=today_date.day)
-            new_date["end"] = new_end_dt.isoformat()
-            logger.debug(f"Remapped end date: {new_date['end']}")
-            
-        return new_date
-
     def _get_todays_scheduled_task_names(self, today_date_str: str) -> set:
         """
         Queries the registry for all tasks scheduled for today and returns a set of their names
         for efficient duplicate checking.
         """
         logger.debug(f"Querying for all tasks already scheduled for today: {today_date_str}")
+        today_date = datetime.date.fromisoformat(today_date_str)
+        today_start_dt = datetime.datetime.combine(today_date, datetime.time.min, tzinfo=self.timezone)
+        tomorrow_start_dt = datetime.datetime.combine(today_date + datetime.timedelta(days=1), datetime.time.min, tzinfo=self.timezone)
+        today_start_iso = today_start_dt.isoformat()
+        tomorrow_start_iso = tomorrow_start_dt.isoformat()
+
+        def _range_filter(property_name: str) -> dict:
+            return {
+                "and": [
+                    {"property": property_name, "date": {"on_or_after": today_start_iso}},
+                    {"property": property_name, "date": {"before": tomorrow_start_iso}}
+                ]
+            }
+
         query_filter = {
             "filter": {
                 "or": [
-                    {"property": "Horario", "date": {"equals": today_date_str}},
-                    {"property": "Horario Planificado", "date": {"equals": today_date_str}}
+                    _range_filter("Horario"),
+                    _range_filter("Horario Planificado")
                 ]
             }
         }
@@ -309,6 +354,9 @@ class NotionDailyPlanner:
         today = datetime.date.today()
         today_str = today.isoformat()
 
+        if today_str not in self.existing_tasks_names:
+            self.existing_tasks_names[today_str] = self._get_todays_scheduled_task_names(today_str)
+
         query_filter = {"filter": {"property": "Tipo", "select": {"equals": "Periódica"}}}
         
         periodic_tasks = self._query_database(self.tasks_db_id, query_filter)
@@ -330,15 +378,17 @@ class NotionDailyPlanner:
             if self._is_task_scheduled_for_today(props, today):
                 logger.info(f"Periodic task '{task_name}' is scheduled for today. Creating it.")
 
-                # Check for an example time in the 'Hora' property.
-                new_planned_date = None
-                time_template_obj = props.get("Hora", {}).get("date")
-                if time_template_obj:
-                    logger.debug(f"Found time template for '{task_name}'. Remapping to today.")
-                    new_planned_date = self._remap_date_to_today(time_template_obj, today)
+                start_prop = props.get("Hora Inicio", {}).get("rich_text", [])
+                end_prop = props.get("Hora Fin", {}).get("rich_text", [])
+
+                start_time_str = start_prop[0].get("plain_text") if start_prop else None
+                end_time_str = end_prop[0].get("plain_text") if end_prop else None
+
+                new_planned_date = self._build_planned_datetime(today, start_time_str, end_time_str, task_name)
                 
                 new_page_payload = self._build_new_page_payload(task, task_name, new_planned_date)
                 self._create_page(new_page_payload)
+                self.existing_tasks_names.setdefault(today_str, set()).add(task_name)
 
     def duplicate_unfinished_tasks_for_today(self):
         """
@@ -349,18 +399,34 @@ class NotionDailyPlanner:
         today = datetime.date.today()
         today_str = today.isoformat()
 
-        yesterday_str = (today - datetime.timedelta(days=1)).isoformat()
-        logger.debug(f"Today's date: {today.isoformat()}, Yesterday's date: {yesterday_str}")
+        yesterday_date = today - datetime.timedelta(days=1)
+        yesterday_start_dt = datetime.datetime.combine(yesterday_date, datetime.time.min, tzinfo=self.timezone)
+        today_start_dt = datetime.datetime.combine(today, datetime.time.min, tzinfo=self.timezone)
+        yesterday_start_iso = yesterday_start_dt.isoformat()
+        today_start_iso = today_start_dt.isoformat()
+        logger.debug(f"Today's date: {today_start_iso}, Yesterday's date: {yesterday_start_iso}")
 
+        if today_str not in self.existing_tasks_names:
+            self.existing_tasks_names[today_str] = self._get_todays_scheduled_task_names(today_str)
+
+        # Note: Notion does not support three level nesting in the filter object, so we have to use an 'or' with two 'and' objects.
         query_filter = {
             "filter": {
-                "and": [
-                    {"property": "Estado", "status": {"does_not_equal": "Finalizada"}},
-                    {"property": "Estado", "status": {"does_not_equal": "Cancelada"}},         
+                "or": [
                     {
-                        "or": [
-                            {"property": "Horario", "date": {"equals": yesterday_str}},                            
-                            {"property": "Horario Planificado", "date": {"equals": yesterday_str}}
+                        "and": [
+                            {"property": "Estado", "status": {"does_not_equal": "Finalizada"}},
+                            {"property": "Estado", "status": {"does_not_equal": "Cancelada"}},
+                            {"property": "Horario", "date": {"on_or_after": yesterday_start_iso}},
+                            {"property": "Horario", "date": {"before": today_start_iso}}
+                        ]
+                    },
+                    {
+                        "and": [
+                            {"property": "Estado", "status": {"does_not_equal": "Finalizada"}},
+                            {"property": "Estado", "status": {"does_not_equal": "Cancelada"}},
+                            {"property": "Horario Planificado", "date": {"on_or_after": yesterday_start_iso}},
+                            {"property": "Horario Planificado", "date": {"before": today_start_iso}}
                         ]
                     }
                 ]
@@ -381,15 +447,23 @@ class NotionDailyPlanner:
             props = task.get("properties", {})
             task_title = props.get("Nombre", {}).get("title", [{}])
             task_name = task_title[0].get("plain_text") if task_title else None
-            logger.debug(f"Processing task: {task_name}")
-
+            
             source_date_obj = None
-            if props.get("Horario", {}).get("date"):
-                source_date_obj = props["Horario"]["date"]
+            task_date_str = "No Date Found"
+
+            horario_date = props.get("Horario", {}).get("date")
+            planificado_date = props.get("Horario Planificado", {}).get("date")
+
+            if horario_date:
+                source_date_obj = horario_date
+                task_date_str = horario_date.get("start", "No Start Date")
                 logger.debug("Using 'Horario' date for remapping.")
-            elif props.get("Horario Planificado", {}).get("date"):
-                source_date_obj = props["Horario Planificado"]["date"]
+            elif planificado_date:
+                source_date_obj = planificado_date
+                task_date_str = planificado_date.get("start", "No Start Date")
                 logger.debug("Using 'Horario Planificado' date for remapping.")
+
+            logger.debug(f"Processing task: {task_name} (Task Date: {task_date_str})")
 
             if not task_name or not source_date_obj:
                 logger.warning(f"Skipping task due to missing task name or date. Task name: {task_name}")
@@ -400,14 +474,28 @@ class NotionDailyPlanner:
                 logger.info(f"Task '{task_name}' for today already exists. Skipping duplication.")
                 continue
 
-            new_planned_date = NotionDailyPlanner._remap_date_to_today(source_date_obj, today)
+            start_dt = datetime.datetime.fromisoformat(source_date_obj["start"])
+            if start_dt.tzinfo is None:
+                start_time_str = start_dt.time().isoformat(timespec="minutes")
+            else:
+                start_time_str = start_dt.astimezone(self.timezone).time().isoformat(timespec="minutes")
+
+            end_time_str = None
+            if source_date_obj.get("end"):
+                end_dt = datetime.datetime.fromisoformat(source_date_obj["end"])
+                if end_dt.tzinfo is None:
+                    end_time_str = end_dt.time().isoformat(timespec="minutes")
+                else:
+                    end_time_str = end_dt.astimezone(self.timezone).time().isoformat(timespec="minutes")
+
+            new_planned_date = self._build_planned_datetime(today, start_time_str, end_time_str, task_name)
+
             logger.debug(f"New planned date for task [{task_name}]: {new_planned_date}")
 
             new_page_payload = self._build_new_page_payload(task, task_name, new_planned_date)
             
             # Update existing_tasks_names if it exists (e.g., when called from run_daily_plan)
-            if today.isoformat() in self.existing_tasks_names:
-                self.existing_tasks_names[today.isoformat()].add(task_name)
+            self.existing_tasks_names.setdefault(today.isoformat(), set()).add(task_name)
 
             logger.info(f"Duplicating task from yesterday: '{task_name}'")
             self._create_page(new_page_payload)
@@ -420,6 +508,9 @@ class NotionDailyPlanner:
         logger.info("Starting add_alerted_objective_tasks.")
         today = datetime.date.today()
         today_str = today.isoformat()
+
+        if today_str not in self.existing_tasks_names:
+            self.existing_tasks_names[today_str] = self._get_todays_scheduled_task_names(today_str)
 
         # Query for non-periodic tasks with alert date <= today and not completed
         query_filter = {
@@ -458,21 +549,18 @@ class NotionDailyPlanner:
                 logger.info(f"Task '{task_name}' for today already exists. Skipping addition.")
                 continue
 
-            # Check for an example time in the 'Hora' property.
-            new_planned_date = None
-            time_template_obj = props.get("Hora", {}).get("date")
-            if time_template_obj:
-                logger.debug(f"Found time template for '{task_name}'. Remapping to today.")
-                new_planned_date = self._remap_date_to_today(time_template_obj, today)
-            else:
-                logger.debug(f"No time template found for '{task_name}'. Setting to all-day.")
-                new_planned_date = {"start": today_str}
+            start_prop = props.get("Hora Inicio", {}).get("rich_text", [])
+            end_prop = props.get("Hora Fin", {}).get("rich_text", [])
+
+            start_time_str = start_prop[0].get("plain_text") if start_prop else None
+            end_time_str = end_prop[0].get("plain_text") if end_prop else None
+
+            new_planned_date = self._build_planned_datetime(today, start_time_str, end_time_str, task_name)
 
             new_page_payload = self._build_new_page_payload(task, task_name, new_planned_date)
 
             # Update existing_tasks_names if it exists (e.g., when called from run_daily_plan)
-            if today_str in self.existing_tasks_names:
-                self.existing_tasks_names[today_str].add(task_name)
+            self.existing_tasks_names.setdefault(today_str, set()).add(task_name)
             
             logger.info(f"Adding alerted objetivo/puntual task: '{task_name}'")
             self._create_page(new_page_payload)

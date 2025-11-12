@@ -1,6 +1,8 @@
-import unittest.mock as mock
-import freezegun
 import datetime
+import os
+import unittest.mock as mock
+
+import freezegun
 import pytest
 
 from autonotion.notion_registry_daily_plan import NotionDailyPlanner
@@ -9,12 +11,26 @@ from autonotion.notion_registry_daily_plan import NotionDailyPlanner
 def multi_select(options: list[str]):
     return {"multi_select": [{"name": option} for option in options]}
 
+
+def make_rich_text(content: str) -> dict:
+    return {
+        "type": "text",
+        "text": {"content": content},
+        "plain_text": content,
+    }
+
+
+def iso_at(planner: NotionDailyPlanner, date_: datetime.date, time_str: str) -> str:
+    time_obj = datetime.time.fromisoformat(time_str)
+    return datetime.datetime.combine(date_, time_obj, tzinfo=planner.timezone).isoformat()
+
+
 def create_periodic_task(name, periodicity, day_of_week=None, day_of_month=None, week_of_month=None, month=None, extra_props=None, task_id="periodic_task_id_123"):
     """Helper function to create a periodic task dictionary."""
     task = {
         "id": task_id,
         "properties": {
-            "Nombre": {"type": "title", "title": [{"type": "text", "text": {"content": name}, "plain_text": name}]},
+            "Nombre": {"type": "title", "title": [make_rich_text(name)]},
             "Periodicidad": multi_select(periodicity),
             # Add a read-only property that should be filtered out
             "ReadOnlyFormula": {"type": "formula", "formula": {"string": "test"}},
@@ -35,20 +51,22 @@ def create_periodic_task(name, periodicity, day_of_week=None, day_of_month=None,
 @pytest.fixture
 def planner():
     """Pytest fixture to provide a NotionDailyPlanner instance with mocked DB properties."""
-    with mock.patch('autonotion.notion_registry_daily_plan.requests.get') as mock_get:
-        # Mock the response for fetching the target (registry) database properties.
-        mock_db_schema = {
-            "properties": {
-                "Nombre": {},
-                "Horario Planificado": {},
-                "Project": {},
-                "Hora": {},
-                "Tarea": {},
-                # Add any other properties from the registry DB that might be copied.
+    with mock.patch.dict(os.environ, {"NOTION_TIMEZONE": "Europe/Madrid"}):
+        with mock.patch('autonotion.notion_registry_daily_plan.requests.get') as mock_get:
+            # Mock the response for fetching the target (registry) database properties.
+            mock_db_schema = {
+                "properties": {
+                    "Nombre": {},
+                    "Horario Planificado": {},
+                    "Project": {},
+                    "Hora Inicio": {},
+                    "Hora Fin": {},
+                    "Tarea": {},
+                    # Add any other properties from the registry DB that might be copied.
+                }
             }
-        }
-        mock_get.return_value = mock.Mock(json=lambda: mock_db_schema)
-        yield NotionDailyPlanner("fake_key", "fake_registry_db_id", "fake_tasks_db_id")
+            mock_get.return_value = mock.Mock(json=lambda: mock_db_schema)
+            yield NotionDailyPlanner("fake_key", "fake_registry_db_id", "fake_tasks_db_id")
 
 
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
@@ -64,14 +82,17 @@ def test_generate_periodic_tasks_daily(mock_requests_post, planner):
 
         query_periodic_response = mock.Mock(json=lambda: {"results": [daily_task]})
         create_response = mock.Mock(status_code=200)
-        # Side effects: 1. Query periodic tasks, 2. Create page
-        # Note: No query for today's tasks since generate_periodic_tasks() doesn't initialize existing_tasks_names when called directly
-        mock_requests_post.side_effect = [query_periodic_response, create_response]
+        # Side effects: 1. Query today's registry (empty), 2. Query periodic tasks, 3. Create page
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+            create_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 2
-        created_payload = mock_requests_post.call_args_list[1].kwargs['json']  # Second call is the create
+        assert mock_requests_post.call_count == 3
+        created_payload = mock_requests_post.call_args_list[2].kwargs['json']  # Third call is the create
         created_props = created_payload["properties"]
         assert created_props["Nombre"]["title"][0]["text"]["content"] == "Daily Standup"
         # Verify extra properties were copied
@@ -85,10 +106,7 @@ def test_generate_periodic_task_with_time(mock_requests_post, planner):
     """Tests that a periodic task with a time template is created with the correct time."""
     with freezegun.freeze_time("2025-10-06"): # A Monday
         time_template = {
-            "Hora": {
-                "type": "date",
-                "date": {"start": "2024-01-01T14:30:00+02:00", "end": None}
-            }
+            "Hora Inicio": {"type": "rich_text", "rich_text": [make_rich_text("14:30")]}
         }
         daily_task_with_time = create_periodic_task(
             "Afternoon Check-in", periodicity=["Diaria"], extra_props=time_template
@@ -96,16 +114,21 @@ def test_generate_periodic_task_with_time(mock_requests_post, planner):
 
         query_periodic_response = mock.Mock(json=lambda: {"results": [daily_task_with_time]})
         create_response = mock.Mock(status_code=200)
-        mock_requests_post.side_effect = [query_periodic_response, create_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+            create_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 2
-        created_payload = mock_requests_post.call_args_list[1].kwargs['json']
+        assert mock_requests_post.call_count == 3
+        created_payload = mock_requests_post.call_args_list[2].kwargs['json']
         created_props = created_payload["properties"]
 
         assert "Horario Planificado" in created_props
-        assert created_props["Horario Planificado"]["date"]["start"] == "2025-10-06T14:30:00+02:00"
+        today = datetime.date(2025, 10, 6)
+        assert created_props["Horario Planificado"]["date"]["start"] == iso_at(planner, today, "14:30")
 
 
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
@@ -118,21 +141,28 @@ def test_generate_periodic_tasks_weekly(mock_requests_post, planner):
     with freezegun.freeze_time("2025-10-06"):
         query_periodic_response = mock.Mock(json=lambda: {"results": [weekly_task]})
         create_response = mock.Mock(status_code=200)
-        mock_requests_post.side_effect = [query_periodic_response, create_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+            create_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 2, "Task should be created on the correct day"
+        assert mock_requests_post.call_count == 3, "Task should be created on the correct day"
 
     # Reset mock and test on the wrong day (Tuesday)
     mock_requests_post.reset_mock()
     with freezegun.freeze_time("2025-10-07"):
         query_periodic_response = mock.Mock(json=lambda: {"results": [weekly_task]})
-        mock_requests_post.side_effect = [query_periodic_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 1, "Task should NOT be created on the wrong day"
+        assert mock_requests_post.call_count == 2, "Task should NOT be created on the wrong day"
 
 
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
@@ -143,11 +173,15 @@ def test_generate_periodic_tasks_monthly_by_day_number(mock_requests_post, plann
     with freezegun.freeze_time("2025-10-15"):
         query_periodic_response = mock.Mock(json=lambda: {"results": [monthly_task]})
         create_response = mock.Mock(status_code=200)
-        mock_requests_post.side_effect = [query_periodic_response, create_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+            create_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 2
+        assert mock_requests_post.call_count == 3
 
 
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
@@ -161,11 +195,15 @@ def test_generate_periodic_tasks_monthly_by_week_and_day(mock_requests_post, pla
     with freezegun.freeze_time("2025-10-14"):
         query_periodic_response = mock.Mock(json=lambda: {"results": [monthly_task]})
         create_response = mock.Mock(status_code=200)
-        mock_requests_post.side_effect = [query_periodic_response, create_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+            create_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 2
+        assert mock_requests_post.call_count == 3
 
 
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
@@ -179,11 +217,15 @@ def test_generate_periodic_tasks_monthly_by_last_week_and_day(mock_requests_post
     with freezegun.freeze_time("2025-10-31"):
         query_periodic_response = mock.Mock(json=lambda: {"results": [monthly_task]})
         create_response = mock.Mock(status_code=200)
-        mock_requests_post.side_effect = [query_periodic_response, create_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+            create_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 2
+        assert mock_requests_post.call_count == 3
 
 
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
@@ -194,11 +236,15 @@ def test_generate_periodic_tasks_yearly(mock_requests_post, planner):
     with freezegun.freeze_time("2025-10-20"):
         query_periodic_response = mock.Mock(json=lambda: {"results": [yearly_task]})
         create_response = mock.Mock(status_code=200)
-        mock_requests_post.side_effect = [query_periodic_response, create_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+            create_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 2
+        assert mock_requests_post.call_count == 3
 
 
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
@@ -211,12 +257,16 @@ def test_skips_creating_existing_periodic_task(mock_requests_post, planner):
         # So the task will be created even if it exists. This test verifies the query behavior.
         query_periodic_response = mock.Mock(json=lambda: {"results": [daily_task]})
         create_response = mock.Mock(status_code=200)
-        mock_requests_post.side_effect = [query_periodic_response, create_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+            create_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        # Query periodic tasks and create (no check for existing tasks when called directly)
-        assert mock_requests_post.call_count == 2
+        # Registry lookup, query periodic tasks and create (no check for existing tasks when called directly)
+        assert mock_requests_post.call_count == 3
 
 
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
@@ -225,11 +275,14 @@ def test_no_periodic_tasks_found(mock_requests_post, planner):
     with freezegun.freeze_time("2025-10-06"):
         # The query for periodic tasks returns an empty list.
         query_periodic_response = mock.Mock(json=lambda: {"results": []})
-        mock_requests_post.side_effect = [query_periodic_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 1
+        assert mock_requests_post.call_count == 2
 
 
 @mock.patch('autonotion.notion_registry_daily_plan.requests.post')
@@ -240,8 +293,11 @@ def test_no_tasks_match_today(mock_requests_post, planner):
         weekly_task = create_periodic_task("Weekly Sync", periodicity=["Semanal"], day_of_week=["1"])
 
         query_periodic_response = mock.Mock(json=lambda: {"results": [weekly_task]})
-        mock_requests_post.side_effect = [query_periodic_response]
+        mock_requests_post.side_effect = [
+            mock.Mock(json=lambda: {"results": []}),
+            query_periodic_response,
+        ]
 
         planner.generate_periodic_tasks()
 
-        assert mock_requests_post.call_count == 1
+        assert mock_requests_post.call_count == 2
